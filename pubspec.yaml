@@ -1,0 +1,15 @@
+name: bazel_builder
+description: "Dart ❤️ Bazel"
+version: 0.0.1
+repository: https://github.com/Attempt3035/bazel_builder
+
+environment:
+  sdk: ^3.3.0
+  flutter: ^3.3.0
+
+dependencies:
+  path: ^1.9.0
+  yaml: ^3.0.0
+
+dev_dependencies:
+  flutter_lints: ^3.0.0
