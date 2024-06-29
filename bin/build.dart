@@ -30,6 +30,7 @@ void main() async {
 
     print('Artifacts Built: $artifacts');
 
+    // Copy the artifacts to the output directory
     for (var artifact in artifacts) {
       var parts = artifact.split(RegExp(r'[\\/]'));
       var fileName = parts.last;
@@ -82,12 +83,12 @@ String generateDynamicLibsClass(Set<String> libNames) {
       .join();
 
   return '''
-// ignore_for_file: non_constant_identifier_names
+// ignore_for_file: non_constant_identifier_names, avoid_classes_with_only_static_members
 import 'dart:io';
 
 class DynamicLibs {
 $getters
-  static String _getSharedLibraryName(String baseName) {
+  static String _getSharedLibraryName(final String baseName) {
     if (Platform.isMacOS || Platform.isIOS) {
       return 'lib\$baseName.dylib'; // macOS and iOS use the .dylib extension
     } else if (Platform.isWindows) {

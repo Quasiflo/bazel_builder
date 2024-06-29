@@ -1,9 +1,18 @@
 {
     "cSpell.words": [
         "Bazel",
+        "dylib",
         "ffigen",
+        "libdynamic",
+        "linkopts",
+        "linkshared",
+        "Podfile",
         "podspec",
         "Prefs",
-        "pubspec"
+        "pubspec",
+        "realpath",
+        "rpath",
+        "srcs",
+        "starlark"
     ]
 }
