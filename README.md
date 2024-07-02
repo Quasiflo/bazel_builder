@@ -1,77 +1,362 @@
-# bazel_builder
-A simple way to run your bazel build configuration to re-generate your dart / flutter Native Assets (c/c++ dynamic libs)
+# Bazel Builder - Flutter ❤️ Bazel
 
-<!--
-This README describes the package. If you publish this package to pub.dev,
-this README's contents appear on the landing page for your package.
+Bazel Builder lets you run & bundle your configured Bazel targets as shared libraries with your application, for use via FFI at runtime. 
 
-For information about how to write a good package README, see the guide for
-[writing package pages](https://dart.dev/guides/libraries/writing-package-pages).
-
-For general information about developing packages, see the Dart guide for
-[creating packages](https://dart.dev/guides/libraries/create-library-packages)
-and the Flutter guide for
-[developing packages and plugins](https://flutter.dev/developing-packages).
--->
-
-Bazel Builder lets you run & bundle your configured Bazel targets as shared libraries with your application, for use via FFI lib at runtime. 
+> Note - This should work fine with dart but it currently remains untested, but should be as simple as copying the libraries next to the binary 🤷‍♀️. Current priority is testing & finishing windows & linux support.
 
 ## Features
 
-- Type-Safe loading of dynamic lib files
-- Select particular Bazel targets to build
-- Simple single build command
-- Automatically copies libs to build folder & bundles into application during compile
-- Works on MacOS & Windows (more platforms to come)
-
-## Getting started
+- Works on MacOS, iOS, Android (windows & linux in progress)
+- Type-Safe loading of dynamic libraries in dart (no more runtime linking errors)
+- Automatically includes libs in all platform builds (bundles into application without manual copying. Also correctly rebuilds when the native code changes)
+- Select particular Bazel targets to build (pubspec configuration)
+- Simple single build command to build all platforms (that can be built on host machine)
 
 ### Prerequisites
 
-#### Bazel Targets
+This readme assumes you are comfortable using both Bazel & Dart / Flutter.
 
-Your bazel target must be a `cc_binary` that will compile to a dynamic linked library. Make sure the `linkshared = True,` attribute is set. On Mac, bazel embeds the wrong search path for the dylib. Add `linkopts = ["-install_name @rpath/lib<myTargetName>.dylib"]` so the application searches in the right place for the library at runtime. Make sure to replace `<myTargetName>` with the name of your target.
+### Current Dev TODO
+ - Finish auto bundling for linux & windows
+ - Make tweaks to where the libs are placed for raw dart applications (they don't get conveniently packaged as they do with this setup for flutter)
+ - Do we need all the android remote stuff? Can we remove this as we aren't building or installing android binaries?
 
-Your final target could be something like this:
+## Bazel Configuration
+
+### All Platforms
+
+We use configurations (the :<platformName> syntax, ie `common:linux_arm64` adds flags to all operations when bazel is being run as `bazel build --config=linux_arm64`) to set options per platform. These are then referenced by the builder when building for that platform.
+
+Add the relevant ones to your `.bazelrc` for the platforms you intend on building for, noting the final section is only needed if you are building android.
+
+```sh
+# Individual linux platform configurations
+common:linux_arm64 --cpu=arm64
+common:linux_x86_64 --cpu=x86_64
+
+# Individual windows platform configurations
+common:windows_arm64 --cpu=arm64_windows
+common:windows_x86_32 --cpu=x64_windows
+common:windows_x86_64 --cpu=x86_windows
+
+# Individual ios platform configurations
+common:ios_arm64 --ios_multi_cpus=arm64
+common:ios_sim_arm64 --ios_multi_cpus=sim_arm64
+common:ios_sim_x86_64 --ios_multi_cpus=x86_64
+
+# Individual macos platform configurations
+common:macos_arm64 --macos_cpus=arm64
+common:macos_x86_64 --macos_cpus=x86_64
+common:macos_universal --macos_cpus=x86_64,arm64
+
+# Individual android platform configurations
+common:android_arm --platforms=//:android_armeabi-v7a
+common:android_arm64 --platforms=//:android_arm64-v8a
+common:android_x86 --platforms=//:android_x86
+common:android_x86_64 --platforms=//:android_x86_64
+
+# Flags needed while the Android rules are being migrated to Starlark.
+common --experimental_google_legacy_api \
+    --experimental_enable_android_migration_apis \
+    --android_sdk=@androidsdk//:sdk
+common:core_library_desugaring --desugar_java8_libs
+
+# Flags to enable mobile-install v3
+mobile-install --mode=skylark --mobile_install_aspect=@rules_android//mobile_install:mi.bzl --mobile_install_supported_rules=android_binary
+# Required to invoke the Studio deployer jar
+mobile-install --tool_java_runtime_version=17
+```
+
+### Windows & Linux
+
+Windows & linux builds simply require code to be built as a dynamic linked library. Assuming you are building on the OS you're building for (ie windows on windows), bazel should work with the out of the box tool-chaining unless your build requires something further.
+
+A minimal setup might look like this:
+
 ```starlark
 cc_binary(
-    name = "dynamic_library_target",
-    srcs = ["src/dynamic_library_target.c"], # if you keep a src folder in the root for your native code
-    linkshared = True,
-    linkopts = [
-        "-install_name @rpath/libdynamic_library_target.dylib"
+    name = "myLib_common",
+    srcs = [
+        "myLib.cpp",
+        "myLib.h",
     ],
+    linkshared = True,
 )
 ```
 
-#### Pubspec Configuration
+### MacOS & iOS
 
-Bazel Builder runs a `bazel build` on the targets you specify in your `pubspec.yaml`. You need to specify by adding a block that lists the targets like this:
+MacOS builds can work using a setup as above, but it is preferred to use apple toolchains for MacOS & iOS. You'll need to be on mac and have xcode set up, unless you have a fancy cross-compilation setup.
+
+> Note: If you for some reason need or want to build the macos .dylib with a normal cc_binary, you can do so. However, you will need to add the `linkopts = ["-install_name @rpath/lib<myTargetName>.dylib"]` attribute to the target to ensure the linker knows where to find the library at runtime. Bazel currently adds the wrong search path for the dylib, so flutter/dart isn't able to find it otherwise.
+
+#### Module.bazel
+
+You will need the following in your `MODULE.bazel` file to get and set up apple's toolchains:
 
 ```starlark
-bazel_builder_config:
-  targets: ["dynamic_library_target"]
+# Get and register the Apple toolchains
+bazel_dep(name = "apple_support", version = "1.15.1")
+bazel_dep(name = "rules_apple", version = "3.6.0", repo_name = "build_bazel_rules_apple")
 ```
 
-This plugin runs Bazel via shell commands from the root of the project (pubspec.yaml), make sure your defined targets are relative to here.
+#### symbols.exp
 
-#### The `dynamic_libs.dart` file
+Both iOS & MacOS require a symbols.exp to tell the linker what symbols to make public. Even exported symbols are ignored unless both exported and in the `symbols.exp` file.
 
-When run, this utility generates a `dynamic_libs.dart` file in the root of the lib folder. This file has getters defined for each dynamic library that is bundled to be in your application. By doing this, you now have a variable that contains the string filename for each lib, and no longer have to worry about runtime linkages failing due to incorrect file names. If you change the output names in your Bazel configuration, this tool will regenerate a matching `dynamic_libs.dart`, and your code will statically fail to compile until you correct the variable names and can be 100% sure you're opening the library you intend to. For a target named `dynamic_library_target`, you'd use this as follows:
+This file should contain a plain text list of the functions prefixed with an underscore. For example, if you had the c functions:
 
-```dart
-import 'package:my_package/dynamic_libs.dart';
-
-void openLibs() {
-  DynamicLibrary.open(DynamicLibs.dynamic_library_target);
+```c
+int myFunction(int a, int b) {
+    return a + b;
+}
+int myOtherFunction(int a, int b) {
+    return a + b;
 }
 ```
 
-Yes, it will indeed point to the right file on the relevant platform, even if it ends with `.dylib`, `.so`, `.dll` or is prefixed with `lib`.
+Your `symbols.exp` file would look like this:
 
-### MacOS
+```text
+_myFunction
+_myOtherFunction
+```
 
-In order to bundle your `dylib`(s) with your mac application, they need to be added as a CocoaPods module so they can be signed and whatever else apple requires for things to work nicely 🤷‍♀️
+This is true for both c and c++, but with c++, you'll also need to use `extern "C"` to prevent name mangling.
+
+#### Info.plist
+
+Both MacOS & iOS require an Info.plist file to be bundled with the dylib or framework. This can be practically empty, but it must exist. Here is a minimal example:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+</dict>
+</plist>
+```
+
+#### MacOS
+For MacOS, your `BUILD.bazel` might look like this:
+
+```starlark
+load("@build_bazel_rules_apple//apple:macos.bzl", "macos_dylib")
+
+cc_library(
+    name = "myLib",
+    srcs = [
+        "myLib.cpp",
+        "myLib.h",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+macos_dylib(
+    name = "libmyLib_macos",
+    bundle_id = "com.example.myLib",
+    exported_symbols_lists = ["symbols.exp"],
+    infoplists = ["Info.plist"],
+    minimum_os_version = "10.11",
+    deps = [":myLib"],
+)
+```
+
+**IMPORTANT NOTE: The target name for macos MUST begin with 'lib'. Otherwise, the linker will fail to find the library when bundling it into the application**
+
+To keep things consistent, I also recommend naming ios targets with 'lib' as well. This will mean that in this example, linux/android and windows targets get built to libmyLib_common.so and libmyLib_common.dll respectively (as lib is automatically prefixed without naming it as this), and macos will be libmyLib_macos.dylib and ios will be libmyLib_ios.framework.
+
+#### iOS
+
+For iOS, your `BUILD.bazel` might look like this:
+
+```starlark
+load("@build_bazel_rules_apple//apple:ios.bzl", "ios_framework")
+
+cc_library(
+    name = "myLib",
+    srcs = [
+        "myLib.cpp",
+        "myLib.h",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+ios_framework(
+    name = "libmyLib_ios",
+    bundle_id = "com.example.myLib",
+    exported_symbols_lists = ["symbols.exp"],
+    families = [
+        "iphone",
+        "ipad",
+    ],
+    infoplists = ["Info.plist"],
+    minimum_os_version = "12.0",
+    deps = [":myLib"],
+)
+```
+
+### Android
+
+The android tool-chaining for bazel is still being developed, and the rules are being migrated to Starlark. You'll need android studio set up with NDK 25 or newer (tested on 27 time of writing).
+
+> Note, you can build with older ndk (22 or older) using the built in bazel `android_ndk_repository` function.
+
+You'll also need to have the `ANDROID_HOME` and `ANDROID_NDK_HOME` environmental variables set or this WILL NOT WORK. Sometimes, android studio will also need `JAVA_HOME` set. My `~/.zshrc` on my mac looks like this with the newest android studio (koala):
+
+```sh
+# Android Studio
+export ANDROID_HOME=/Users/<myUserHome>/Library/Android/sdk
+export ANDROID_NDK_HOME=/Users/<myUserHome>/Library/Android/sdk/ndk/27.0.11902837
+
+# Java
+export JAVA_HOME=/Applications/Android\ Studio.app/Contents/jbr/Contents/Home
+export PATH=$JAVA_HOME/bin:$PATH
+```
+
+Also, a friendly reminder to ensure you've set some essential flags in your .bazelrc file, as mentioned earlier:
+
+```sh
+# Flags needed while the Android rules are being migrated to Starlark.
+common --experimental_google_legacy_api \
+    --experimental_enable_android_migration_apis \
+    --android_sdk=@androidsdk//:sdk
+common:core_library_desugaring --desugar_java8_libs
+
+# Flags to enable mobile-install v3
+mobile-install --mode=skylark --mobile_install_aspect=@rules_android//mobile_install:mi.bzl --mobile_install_supported_rules=android_binary
+# Required to invoke the Studio deployer jar
+mobile-install --tool_java_runtime_version=17
+```
+
+#### Module.bazel
+
+You will need the following in your `MODULE.bazel` file to get and set up android's toolchains:
+
+```starlark
+# Get a new version of rules_android from github
+bazel_dep(
+    name = "rules_android",
+    version = "0.2.0",
+)
+RULES_ANDROID_COMMIT = "f8aa37578cd8c911188cbb0a9f25c927456099ca"
+git_override(
+    module_name = "rules_android",
+    remote = "https://github.com/bazelbuild/rules_android",
+    commit = RULES_ANDROID_COMMIT,
+)
+
+# Get remote android tools extensions
+remote_android_extensions = use_extension("@bazel_tools//tools/android:android_extensions.bzl", "remote_android_tools_extensions")
+use_repo(remote_android_extensions, "android_gmaven_r8", "android_tools")
+
+# Register the android toolchains
+register_toolchains(
+    "@rules_android//toolchains/android:android_default_toolchain",
+    "@rules_android//toolchains/android_sdk:android_sdk_tools",
+)
+
+# Register the android sdk repository
+android_sdk_repository_extension = use_extension("@rules_android//rules/android_sdk_repository:rule.bzl", "android_sdk_repository_extension")
+use_repo(android_sdk_repository_extension, "androidsdk")
+register_toolchains("@androidsdk//:sdk-toolchain", "@androidsdk//:all")
+```
+
+At the moment, you also need this in your `WORKSPACE.bazel` file (pending [this pull request](https://github.com/bazelbuild/rules_android_ndk/pull/70) to switch fully to bzlmod, thanks @ahumesky !)
+
+```starlark
+RULES_ANDROID_NDK_COMMIT = "f942689ffd3b3c59e7be0bd3b0ceabcaeffc6aea"
+
+RULES_ANDROID_NDK_SHA = "21e1ffc21f94e51230f1589a70dc72b309e7bd3acaea3c440caaa7f7b85e16fb"
+
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "rules_android_ndk",
+    sha256 = RULES_ANDROID_NDK_SHA,
+    strip_prefix = "rules_android_ndk-%s" % RULES_ANDROID_NDK_COMMIT,
+    url = "https://github.com/bazelbuild/rules_android_ndk/archive/%s.zip" % RULES_ANDROID_NDK_COMMIT,
+)
+
+load("@rules_android_ndk//:rules.bzl", "android_ndk_repository")
+
+android_ndk_repository(
+    name = "androidndk",
+)
+
+register_toolchains("@androidndk//:all")
+```
+
+#### BUILD.bazel
+
+Now, you can build the same target as for linux and windows, but with the android toolchain. Here was the target example again:
+
+```starlark
+cc_binary(
+    name = "myLib_common",
+    srcs = [
+        "myLib.cpp",
+        "myLib.h",
+    ],
+    linkshared = True,
+)
+```
+
+## Dart / Flutter Configuration
+
+### All Platforms
+
+Configuration of the builder will be via pubspec.yaml. You can add multiple targets and different bazel targets per platform. You can also modify which platforms are built on which host. Here's a full example yaml:
+
+```yaml
+bazel_builder_config: # All the bazel builder configuration goes in here
+  buildOnLinux: # Which platforms to build on linux host
+    android: # Build one android .so for arm64 and one for x86_64
+      arm: false
+      arm64: true
+      x86: false
+      x86_64: true
+    linux: # Build one linux .so for arm64 and one for x86_64
+      x86_64: true
+      arm64: true
+  buildOnWindows: # Which platforms to build on windows host
+    windows: # Build one windows .dll for arm64 and one for x86_64
+      x86_32: false
+      x86_64: true
+      arm64: true
+  buildOnMacos: # Which platforms to build on macos host
+    macos: # On macOS, you can build either/both a dylib for arm64 and x86_64, or you can build a universal binary which has both architectures built into the one (bigger size but easier distribution)
+      x86_64: false
+      arm64: false
+      universal: true
+    ios: 
+      buildIosSimulator: true # Build for the simulator or for a real device. Can't build both architectures together!
+    android:
+      arm: false
+      arm64: true
+      x86: true
+      x86_64: true
+  targets: # A set of bazel targets to build. The key name 'MyLib' will be used to load the lib in dart, and doesn't have to match anything else. The target strings are the bazel targets to build for each platform. This example assumes your bazel BUILD is in src/myLib (from the root level of the project, not within the lib folder)
+    MyLib: 
+      platforms: 
+        android: 
+          target: '//src/myLib:myLib_common'
+        windows: 
+          target: '//src/myLib:myLib_common'
+        linux: 
+          target: '//src/myLib:myLib_common'
+        macos: 
+          target: '//src/myLib:libmyLib_macos'
+        ios: 
+          target: '//src/myLib:libmyLib_ios'
+```
+
+### Linux & Windows
+TODO: Add instructions and support for auto bundling linux and windows
+
+### MacOS & iOS
+
+In order to bundle your `dylib`(s) and `frameworks`(s) with your mac/ios application, they need to be added as a CocoaPods module so they can be bundled with the app on build.
 
 > Note: Your `Podfile` won't be generated by flutter until after you've added your first dependency with native code and run a dart / flutter `pub get`. I recommend adding `path_provider`. YOU NEED TO HAVE A PLUGIN THAT BUILDS NATIVE MACOS CODE OR FLUTTER WILL IGNORE THE PODSPEC ANYWAY.
 
@@ -90,14 +375,48 @@ target 'Runner' do
 end
 ```
 
-When you run the builder script, it will make a `bazel_builder.podspec` file in the `build/shared_libs` directory. This will add all the `.dylib`s as a module to the build.
+When you run the builder script, it will make a `bazel_builder.podspec` file in the `build/shared_libs` directory. This will add all the `.dylib`s and `.frameworks` as a module to the build.
 
-## Usage
+**NOTE: You'll need to add this to both the iOS podspec and Macos podspec if you're wanting to build both**
+
+### Android:
+
+Inside your android folder, inside the `app` folder, you'll need to add the following to your `build.gradle` file:
+
+```gradle
+android {
+    ... Existing configuration ...
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['src/main/jniLibs', '../../build/shared_libs/android']
+        }
+    }
+}
+```
+
+This will tell android to include the `.so` files that get built from bazel and parsed through the bazel builder into the build.
+
+## Running the Utility
 
 **To run the build, execute `flutter pub run bazel_builder:build`**
 
-This command will run `bazel build <target>` on all the targets in your `pubspec.yaml`, copy the shared objects, and create anything else needed to tell flutter to bundle everything into your final build.
+This command will run `bazel build <target>` on all the targets in your `pubspec.yaml` for the selected the platforms you set up (targeting the relevant configs in your `.bazelrc` and their appropriate flags), copy the shared objects, and create the `dynamic_libs.dart` file in the root of the lib folder.
+
+### The generated `dynamic_libs.dart` file
+
+When run, this utility generates a `dynamic_libs.dart` file in the root of the lib folder. This file has getters defined for each dynamic library that is bundled to be in your application. By doing this, you now have a variable that contains the string filename for each lib, and no longer have to worry about runtime linkages failing due to incorrect file names. If you change the library names in your `pubspec.yaml` configuration, this tool will regenerate a matching `dynamic_libs.dart`, and your code will statically fail to compile until you correct the variable names and can be 100% sure you're opening the library that exists and you intend to. For a target named `dynamic_library_target`, you'd use this as follows:
+
+```dart
+import 'package:my_package/dynamic_libs.dart';
+
+void openLibs() {
+  DynamicLibrary.open(DynamicLibs.dynamic_library_target);
+}
+```
+
+Yes, it will indeed point to the right file on the relevant platform, even if it ends with `.dylib`, `.so`, `.dll` or is prefixed with `lib`, as the file names that get built are parsed via the tool from bazel.
 
 ## Additional information
 
-This package is only a very simple prototype, and ideally isn't needed at all once [Native Assets Dart](https://github.com/dart-lang/sdk/issues/50565) and [Native Assets Flutter](https://github.com/flutter/flutter/issues/129757) is out, although it may just morph to be an extension using these systems if bazel support is still non-trivial to implement in a project.
+This package is currently a relatively simple prototype, and ideally isn't needed at all once [Native Assets Dart](https://github.com/dart-lang/sdk/issues/50565) and [Native Assets Flutter](https://github.com/flutter/flutter/issues/129757) is out, although it may just morph to be an extension using these systems if bazel support is still non-trivial to implement in a project.

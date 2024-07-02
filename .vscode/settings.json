@@ -1,6 +1,8 @@
 {
     "cSpell.words": [
         "Bazel",
+        "buildable",
+        "cpus",
         "dylib",
         "ffigen",
         "libdynamic",

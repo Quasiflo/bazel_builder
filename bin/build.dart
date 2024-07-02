@@ -1,120 +1,239 @@
 import 'dart:io';
-import 'package:yaml/yaml.dart';
-import 'package:path/path.dart' as path;
+import 'package:bazel_builder/src/configuration_parser.dart';
+import 'package:bazel_builder/src/structures.dart';
+import 'package:bazel_builder/src/tools.dart';
 
 void main() async {
-  Map<String, dynamic> config = parseConfig('pubspec.yaml');
+  // Get the config preferences from the pubspec.yaml
+  final config = parseConfig();
 
-  Set<String> dynamicLibNames = {};
+  // Print some info about the build
+  printBuildInfo(config);
 
-  var outputDir = Directory(path.join('build', 'shared_libs'));
-  if (!outputDir.existsSync()) {
-    outputDir.createSync(recursive: true);
+  List<PlatformFileNames> dynamicLibNames = [];
+  final outputDir = getOutputDirectory();
+
+  // Platform specific setup
+  if (Platform.isMacOS) {
+    await generatePodspecFile(outputDir);
   }
-  var podspec = 'bazel_builder.podspec';
-  await File(path.join(outputDir.path, podspec)).writeAsString(podspecContent);
 
-  for (var target in config['targets']) {
-    var result = await Process.run('bazel', ['build', target]);
+  // Build each of the targets
+  for (var target in config.targets.entries) {
+    final fileNames =
+        PlatformFileNames(target.key, null, null, null, null, null);
+    // final buildablePlatforms = getBuildablePlatforms(config);
 
-    if (result.exitCode != 0) {
-      print('Error building $target: ${result.stderr}');
-      throw Exception('Failed to run bazel build for target: $target');
+    // Android Builds
+    for (var platform in target.value.platforms.entries
+        .where((p) => p.key == BuildPlatform.android)) {
+      final profile = config.hostBuildVariants.android;
+
+      if (profile == null) {
+        print('Skipping Android build, no profile specified');
+        continue;
+      }
+
+      Map<String, String> androidBuildPlatforms = {
+        if (profile.arm) '--config=android_arm': 'armeabi-v7a',
+        if (profile.arm64) '--config=android_arm64': 'arm64-v8a',
+        if (profile.x86) '--config=android_x86': 'x86',
+        if (profile.x86_64) '--config=android_x86_64': 'x86_64',
+      };
+
+      // On android, we build all of the architectures we can
+      List<String> filenames = [];
+
+      for (var platformConfig in androidBuildPlatforms.entries) {
+        final artifacts = await buildTargetPlatform(
+          platform.key,
+          platform.value,
+          endOptions: [platformConfig.key],
+        );
+
+        filenames.add(copyArtifactsToOutputDir(artifacts, outputDir, 'android',
+            subDir: platformConfig.value));
+      }
+
+      if (filenames.isEmpty ||
+          !filenames.every((name) => name == filenames.first)) {
+        throw Exception(
+            'Some of the android architectures produced differing file names');
+      }
+
+      updateFileNames(platform.key, config, filenames.first, fileNames);
     }
 
-    var artifacts = (result.stderr as String)
-        .split('\n')
-        .where((line) => line.startsWith('  '))
-        .map((line) => line.trim())
-        .toList();
+    // iOS Builds
+    for (var platform in target.value.platforms.entries
+        .where((p) => p.key == BuildPlatform.ios)) {
+      final profile = config.hostBuildVariants.ios;
 
-    print('Artifacts Built: $artifacts');
+      if (profile == null) {
+        print('Skipping iOS build, no profile specified');
+        continue;
+      }
 
-    // Copy the artifacts to the output directory
-    for (var artifact in artifacts) {
-      var parts = artifact.split(RegExp(r'[\\/]'));
-      var fileName = parts.last;
-      var outputPath = path.join(outputDir.path, fileName);
-      await File(artifact).copy(outputPath);
+      List<String> iosBuildOptions = [
+        if (profile.buildIosSimulator == false)
+          '--config=ios_arm64'
+        else if (isMacOSArm())
+          '--config=ios_sim_arm64'
+        else
+          '--config=ios_sim_x86_64'
+      ];
 
-      var libName = path.basenameWithoutExtension(fileName);
-      dynamicLibNames.add(libName);
+      final artifacts = await buildTargetPlatform(
+        platform.key,
+        platform.value,
+        endOptions: iosBuildOptions,
+      );
+
+      final fileName = copyArtifactsToOutputDir(artifacts, outputDir, 'ios');
+      updateFileNames(platform.key, config, fileName, fileNames);
     }
-  }
 
-  // Generate the DynamicLibs class
-  var libsClassContent = generateDynamicLibsClass(dynamicLibNames);
-  await File(path.join('lib', 'dynamic_libs.dart'))
-      .writeAsString(libsClassContent);
-}
+    // MacOS Builds
+    for (var platform in target.value.platforms.entries
+        .where((p) => p.key == BuildPlatform.macos)) {
+      final profile = config.hostBuildVariants.macos;
 
-// Parse the configuration options
-Map<String, dynamic> parseConfig(String filePath) {
-  File configFile = File(filePath);
-  if (!configFile.existsSync()) {
-    throw Exception('Configuration file not found at path: $filePath');
-  }
+      if (profile == null) {
+        print('Skipping MacOS build, no profile specified');
+        continue;
+      }
 
-  String yamlContent = configFile.readAsStringSync();
-  Map yamlMap = loadYaml(yamlContent);
-  if (!yamlMap.containsKey('bazel_builder_config')) {
-    throw Exception(
-        'The required "bazel_builder_config" key is not found in the YAML file.');
-  }
+      List<String> macosBuildOptions = [
+        if (profile.universal) '--config=macos_universal',
+        if (!profile.universal && profile.arm64) '--config=macos_arm64',
+        if (!profile.universal && profile.x86_64) '--config=macos_x86_64',
+      ];
 
-  final bazelConfig = yamlMap['bazel_builder_config'];
-  if (bazelConfig['targets'] == null) {
-    throw Exception('Invalid or missing "targets" configuration.');
-  }
+      // On mac, we build all of the architectures we can
+      List<String> filenames = [];
 
-  if (bazelConfig['targets'] is! List) {
-    throw Exception('The "targets" key must be a list.');
-  }
+      for (var platformConfig in macosBuildOptions) {
+        final artifacts = await buildTargetPlatform(
+          platform.key,
+          platform.value,
+          endOptions: [platformConfig],
+        );
 
-  return {
-    'targets': List<String>.from(bazelConfig['targets']),
-  };
-}
+        filenames.add(copyArtifactsToOutputDir(artifacts, outputDir, 'macos')); // TODO
+      }
 
-String generateDynamicLibsClass(Set<String> libNames) {
-  var getters = libNames
-      .map((name) =>
-          '  static String get ${nameWithoutLibPrefix(name)} => _getSharedLibraryName(\'${nameWithoutLibPrefix(name)}\');\n')
-      .join();
+      if (filenames.isEmpty ||
+          !filenames.every((name) => name == filenames.first)) {
+        throw Exception(
+            'Some of the macos architectures produced differing file names');
+      }
 
-  return '''
-// ignore_for_file: non_constant_identifier_names, avoid_classes_with_only_static_members
-import 'dart:io';
-
-class DynamicLibs {
-$getters
-  static String _getSharedLibraryName(final String baseName) {
-    if (Platform.isMacOS || Platform.isIOS) {
-      return 'lib\$baseName.dylib'; // macOS and iOS use the .dylib extension
-    } else if (Platform.isWindows) {
-      return '\$baseName.dll'; // Windows uses the .dll extension
-    } else if (Platform.isLinux || Platform.isAndroid) {
-      return 'lib\$baseName.so'; // Linux and android uses the .so extension
+      updateFileNames(platform.key, config, filenames.first, fileNames);
     }
-    throw UnsupportedError('Unsupported platform');
+
+    // Linux Builds
+    for (var platform in target.value.platforms.entries
+        .where((p) => p.key == BuildPlatform.linux)) {
+      final profile = config.hostBuildVariants.linux;
+
+      if (profile == null) {
+        print('Skipping MacOS build, no profile specified');
+        continue;
+      }
+
+      List<String> linuxBuildOptions = [
+        if (profile.arm64) '--config=linux_arm64',
+        if (profile.x86_64) '--config=linux_x86_64',
+      ];
+
+      // On linux, we build all of the architectures we can
+      List<String> filenames = [];
+
+      for (var platformConfig in linuxBuildOptions) {
+        final artifacts = await buildTargetPlatform(
+          platform.key,
+          platform.value,
+          endOptions: [platformConfig],
+        );
+
+        filenames.add(copyArtifactsToOutputDir(artifacts, outputDir, 'linux')); // TODO cpus
+      }
+
+      if (filenames.isEmpty ||
+          !filenames.every((name) => name == filenames.first)) {
+        throw Exception(
+            'Some of the linux architectures produced differing file names');
+      }
+
+      updateFileNames(platform.key, config, filenames.first, fileNames);
+    }
+
+    // Windows Builds
+    for (var platform in target.value.platforms.entries
+        .where((p) => p.key == BuildPlatform.windows)) {
+      final profile = config.hostBuildVariants.windows;
+
+      if (profile == null) {
+        print('Skipping Windows build, no profile specified');
+        continue;
+      }
+
+      List<String> windowsBuildOptions = [
+        if (profile.arm64) '--config=windows_arm64',
+        if (profile.x86_32) '--config=windows_x86_32',
+        if (profile.x86_64) '--config=windows_x86_64',
+      ];
+
+      // On windows, we build all of the architectures we can
+      List<String> filenames = [];
+
+      for (var platformConfig in windowsBuildOptions) {
+        final artifacts = await buildTargetPlatform(
+          platform.key,
+          platform.value,
+          endOptions: [platformConfig],
+        );
+
+        filenames.add(copyArtifactsToOutputDir(artifacts, outputDir, 'windows')); // TODO cpus
+      }
+
+      if (filenames.isEmpty ||
+          !filenames.every((name) => name == filenames.first)) {
+        throw Exception(
+            'Some of the windows architectures produced differing file names');
+      }
+
+      updateFileNames(platform.key, config, filenames.first, fileNames);
+    }
+
+    dynamicLibNames.add(fileNames);
   }
+
+  await generateDynamicLibs(dynamicLibNames);
 }
-''';
+
+Future<List<String>> buildTargetPlatform(
+    BuildPlatform platform, PlatformTarget target,
+    {List<String> middleOptions = const [],
+    List<String> endOptions = const []}) async {
+  var result = await Process.run('bazel', [
+    'build',
+    ...middleOptions,
+    target.target,
+    ...endOptions,
+  ]);
+
+  if (result.exitCode != 0) {
+    print('Error building $platform: ${result.stderr}');
+    throw Exception('Failed to run bazel build for target: $platform');
+  }
+
+  var artifacts = (result.stderr as String)
+      .split('\n')
+      .where((line) => line.startsWith('  '))
+      .map((line) => line.trim())
+      .toList();
+
+  print('Artifacts Built: $artifacts');
+  return artifacts;
 }
-
-String nameWithoutLibPrefix(String name) =>
-    name.startsWith('lib') ? name.substring(3) : name;
-
-final podspecContent = '''
-Pod::Spec.new do |s|
-  s.name = "bazel_builder"
-  s.version = "0.0.1"
-  s.summary = "Bazel Builder links all your bazel generated dynamic libraries to the application."
-
-  s.homepage = "https://github.com/Attempt3035/bazel_builder"
-  s.author = "Attempt3035"
-  s.source = { :path => "." }
-  s.vendored_libraries = "*.dylib"
-end
-
-''';
