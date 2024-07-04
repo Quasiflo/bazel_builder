@@ -1,0 +1,28 @@
+PODS:
+  - bazel_builder (0.0.1)
+  - Flutter (1.0.0)
+  - path_provider_foundation (0.0.1):
+    - Flutter
+    - FlutterMacOS
+
+DEPENDENCIES:
+  - bazel_builder (from `../build/shared_libs/bazel_builder.podspec`)
+  - Flutter (from `Flutter`)
+  - path_provider_foundation (from `.symlinks/plugins/path_provider_foundation/darwin`)
+
+EXTERNAL SOURCES:
+  bazel_builder:
+    :path: "../build/shared_libs/bazel_builder.podspec"
+  Flutter:
+    :path: Flutter
+  path_provider_foundation:
+    :path: ".symlinks/plugins/path_provider_foundation/darwin"
+
+SPEC CHECKSUMS:
+  bazel_builder: 0b59b26299a07afb2764a2318ef52ad52afff3db
+  Flutter: e0871f40cf51350855a761d2e70bf5af5b9b5de7
+  path_provider_foundation: 2b6b4c569c0fb62ec74538f866245ac84301af46
+
+PODFILE CHECKSUM: bd5261f81c091d0019bc5de3b055c55d158e0121
+
+COCOAPODS: 1.15.2

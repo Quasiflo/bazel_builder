@@ -1,0 +1,53 @@
+"""
+"""
+
+# Hedron compile commands extractor creates the compile_commands.json for other tools like clangd to use
+bazel_dep(name = "hedron_compile_commands", dev_dependency = True)
+git_override(
+    module_name = "hedron_compile_commands",
+    remote = "https://github.com/hedronvision/bazel-compile-commands-extractor.git",
+    commit = "1e08f8e0507b6b6b1f4416a9a22cf5c28beaba93",
+)
+
+# General dependencies
+bazel_dep(name = "platforms", version = "0.0.10")
+
+# Get rules_android and rules_android_ndk from github
+RULES_ANDROID_COMMIT = "e02da4d00ad81d44f1c8fd1b2ee46f057afdd392"
+bazel_dep(name = "rules_android")
+git_override(
+    module_name = "rules_android",
+    remote = "https://github.com/bazelbuild/rules_android",
+    commit = RULES_ANDROID_COMMIT,
+)
+
+RULES_ANDROID_NDK_COMMIT = "d5c9d46a471e8fcd80e7ec5521b78bb2df48f4e0"
+bazel_dep(name = "rules_android_ndk")
+git_override(
+    module_name = "rules_android_ndk",
+    remote = "https://github.com/bazelbuild/rules_android_ndk",
+    commit = RULES_ANDROID_NDK_COMMIT,
+)
+
+# Use the extensions to set up the android tools
+remote_android_extensions = use_extension("@bazel_tools//tools/android:android_extensions.bzl", "remote_android_tools_extensions")
+android_sdk_repository_extension = use_extension("@rules_android//rules/android_sdk_repository:rule.bzl", "android_sdk_repository_extension")
+android_ndk_repository_extension = use_extension("@rules_android_ndk//:extension.bzl", "android_ndk_repository_extension")
+
+# Add the repos
+use_repo(remote_android_extensions, "android_gmaven_r8", "android_tools")
+use_repo(android_sdk_repository_extension, "androidsdk")
+use_repo(android_ndk_repository_extension, "androidndk")
+
+# Register the android toolchains
+register_toolchains(
+    "@rules_android//toolchains/android:android_default_toolchain",
+    "@rules_android//toolchains/android_sdk:android_sdk_tools",
+    "@androidsdk//:sdk-toolchain",
+    "@androidsdk//:all",
+    "@androidndk//:all",
+)
+
+# Get and register the Apple toolchains
+bazel_dep(name = "apple_support", version = "1.15.1")
+bazel_dep(name = "rules_apple", version = "3.6.0", repo_name = "build_bazel_rules_apple")

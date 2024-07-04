@@ -1,0 +1,28 @@
+PODS:
+  - bazel_builder (0.0.1)
+  - FlutterMacOS (1.0.0)
+  - path_provider_foundation (0.0.1):
+    - Flutter
+    - FlutterMacOS
+
+DEPENDENCIES:
+  - bazel_builder (from `../build/shared_libs/bazel_builder.podspec`)
+  - FlutterMacOS (from `Flutter/ephemeral`)
+  - path_provider_foundation (from `Flutter/ephemeral/.symlinks/plugins/path_provider_foundation/darwin`)
+
+EXTERNAL SOURCES:
+  bazel_builder:
+    :path: "../build/shared_libs/bazel_builder.podspec"
+  FlutterMacOS:
+    :path: Flutter/ephemeral
+  path_provider_foundation:
+    :path: Flutter/ephemeral/.symlinks/plugins/path_provider_foundation/darwin
+
+SPEC CHECKSUMS:
+  bazel_builder: 0b59b26299a07afb2764a2318ef52ad52afff3db
+  FlutterMacOS: 8f6f14fa908a6fb3fba0cd85dbd81ec4b251fb24
+  path_provider_foundation: 2b6b4c569c0fb62ec74538f866245ac84301af46
+
+PODFILE CHECKSUM: edaa24a1202529855c0be9ff6384056999f8660d
+
+COCOAPODS: 1.15.2

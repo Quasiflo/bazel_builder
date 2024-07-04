@@ -1,0 +1,41 @@
+# Individual linux platform configurations
+common:linux_arm64 --platforms=//:linux_arm64
+common:linux_x86_64 --platforms=//:linux_x86_64
+
+# Individual windows platform configurations
+common:windows_arm64 --platforms=//:windows_arm64
+common:windows_x86_32 --platforms=//:windows_x86_32
+common:windows_x86_64 --platforms=//:windows_x86_64
+
+# Individual ios platform configurations
+common:ios_arm64 --platforms=//:ios_arm64 \
+    --ios_multi_cpus=arm64
+common:ios_sim_arm64 --platforms=//:ios_sim_arm64 \
+    --ios_multi_cpus=sim_arm64
+common:ios_sim_x86_64 --platforms=//:ios_sim_x86_64 \
+    --ios_multi_cpus=x86_64
+
+# Individual macos platform configurations
+common:macos_arm64 --platforms=//:macos_arm64 \
+    --macos_cpus=arm64
+common:macos_x86_64 --platforms=//:macos_x86_64 \
+    --macos_cpus=x86_64
+common:macos_universal --platforms=//:macos_universal \
+    --macos_cpus=arm64,x86_64
+
+# Individual android platform configurations
+common:android_arm --platforms=//:android_armeabi-v7a
+common:android_arm64 --platforms=//:android_arm64-v8a
+common:android_x86 --platforms=//:android_x86
+common:android_x86_64 --platforms=//:android_x86_64
+
+# Flags needed while the Android rules are being migrated to Starlark.
+common --experimental_google_legacy_api \
+    --experimental_enable_android_migration_apis \
+    --android_sdk=@androidsdk//:sdk
+common:core_library_desugaring --desugar_java8_libs
+
+# Flags to enable mobile-install v3
+mobile-install --mode=skylark --mobile_install_aspect=@rules_android//mobile_install:mi.bzl --mobile_install_supported_rules=android_binary
+# Required to invoke the Studio deployer jar
+mobile-install --tool_java_runtime_version=17

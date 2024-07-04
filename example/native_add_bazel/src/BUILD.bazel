@@ -1,0 +1,44 @@
+load("@build_bazel_rules_apple//apple:ios.bzl", "ios_framework")
+load("@build_bazel_rules_apple//apple:macos.bzl", "macos_dylib")
+
+cc_binary(
+    name = "native_add_common",
+    srcs = [
+        "native_add.cpp",
+        "native_add.h",
+    ],
+    linkshared = True,
+)
+
+cc_library(
+    name = "native_add_lib",
+    srcs = [
+        "native_add.cpp",
+        "native_add.h",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+ios_framework(
+    name = "libnative_add_ios",
+    bundle_id = "com.example.native_add_bazel",
+    exported_symbols_lists = ["symbols.exp"],
+    families = [
+        "iphone",
+        "ipad",
+    ],
+    infoplists = ["Info.plist"],
+    minimum_os_version = "12.0",
+    visibility = ["//visibility:public"],
+    deps = [":native_add_lib"],
+)
+
+macos_dylib(
+    name = "libnative_add_macos",
+    bundle_id = "com.example.native_add_bazel",
+    exported_symbols_lists = ["symbols.exp"],
+    infoplists = ["Info.plist"],
+    minimum_os_version = "10.11",
+    visibility = ["//visibility:public"],
+    deps = [":native_add_lib"],
+)

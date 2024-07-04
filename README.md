@@ -21,51 +21,17 @@ This readme assumes you are comfortable using both Bazel & Dart / Flutter.
  - Make tweaks to where the libs are placed for raw dart applications (they don't get conveniently packaged as they do with this setup for flutter)
  - Do we need all the android remote stuff? Can we remove this as we aren't building or installing android binaries?
 
+## Full Example
+
+A full example is available in the `example` folder. This example includes a simple c++ library that adds two numbers together, and a flutter application that uses this library to add two numbers together with a 3 second delay (to simulate native work being asynchronously processed) and display the result. To build, you'll need to first run `flutter pub run bazel_builder:build`, then run your flutter build.
+
 ## Bazel Configuration
 
 ### All Platforms
 
-We use configurations (the :<platformName> syntax, ie `common:linux_arm64` adds flags to all operations when bazel is being run as `bazel build --config=linux_arm64`) to set options per platform. These are then referenced by the builder when building for that platform.
+We use configurations (the :<platformName> syntax, ie `common:linux_arm64` adds flags to all operations when bazel is being run as `bazel build --config=linux_arm64`) to set options per platform. These are then referenced by the builder when building for that platform. These also link to `platform`s in the `BUILD.bazel` file, to give you an easy way to change copts or other options per platform.
 
-Add the relevant ones to your `.bazelrc` for the platforms you intend on building for, noting the final section is only needed if you are building android.
-
-```sh
-# Individual linux platform configurations
-common:linux_arm64 --cpu=arm64
-common:linux_x86_64 --cpu=x86_64
-
-# Individual windows platform configurations
-common:windows_arm64 --cpu=arm64_windows
-common:windows_x86_32 --cpu=x64_windows
-common:windows_x86_64 --cpu=x86_windows
-
-# Individual ios platform configurations
-common:ios_arm64 --ios_multi_cpus=arm64
-common:ios_sim_arm64 --ios_multi_cpus=sim_arm64
-common:ios_sim_x86_64 --ios_multi_cpus=x86_64
-
-# Individual macos platform configurations
-common:macos_arm64 --macos_cpus=arm64
-common:macos_x86_64 --macos_cpus=x86_64
-common:macos_universal --macos_cpus=x86_64,arm64
-
-# Individual android platform configurations
-common:android_arm --platforms=//:android_armeabi-v7a
-common:android_arm64 --platforms=//:android_arm64-v8a
-common:android_x86 --platforms=//:android_x86
-common:android_x86_64 --platforms=//:android_x86_64
-
-# Flags needed while the Android rules are being migrated to Starlark.
-common --experimental_google_legacy_api \
-    --experimental_enable_android_migration_apis \
-    --android_sdk=@androidsdk//:sdk
-common:core_library_desugaring --desugar_java8_libs
-
-# Flags to enable mobile-install v3
-mobile-install --mode=skylark --mobile_install_aspect=@rules_android//mobile_install:mi.bzl --mobile_install_supported_rules=android_binary
-# Required to invoke the Studio deployer jar
-mobile-install --tool_java_runtime_version=17
-```
+**Copy the `.bazelrc` and `BUILD.bazel` files from the example folder to your project root. You can then modify these to suit your project.**
 
 ### Windows & Linux
 
@@ -214,77 +180,46 @@ export JAVA_HOME=/Applications/Android\ Studio.app/Contents/jbr/Contents/Home
 export PATH=$JAVA_HOME/bin:$PATH
 ```
 
-Also, a friendly reminder to ensure you've set some essential flags in your .bazelrc file, as mentioned earlier:
-
-```sh
-# Flags needed while the Android rules are being migrated to Starlark.
-common --experimental_google_legacy_api \
-    --experimental_enable_android_migration_apis \
-    --android_sdk=@androidsdk//:sdk
-common:core_library_desugaring --desugar_java8_libs
-
-# Flags to enable mobile-install v3
-mobile-install --mode=skylark --mobile_install_aspect=@rules_android//mobile_install:mi.bzl --mobile_install_supported_rules=android_binary
-# Required to invoke the Studio deployer jar
-mobile-install --tool_java_runtime_version=17
-```
-
 #### Module.bazel
 
 You will need the following in your `MODULE.bazel` file to get and set up android's toolchains:
 
 ```starlark
-# Get a new version of rules_android from github
-bazel_dep(
-    name = "rules_android",
-    version = "0.2.0",
-)
-RULES_ANDROID_COMMIT = "f8aa37578cd8c911188cbb0a9f25c927456099ca"
+# Get rules_android and rules_android_ndk from github
+RULES_ANDROID_COMMIT = "e02da4d00ad81d44f1c8fd1b2ee46f057afdd392"
+bazel_dep(name = "rules_android")
 git_override(
     module_name = "rules_android",
     remote = "https://github.com/bazelbuild/rules_android",
     commit = RULES_ANDROID_COMMIT,
 )
 
-# Get remote android tools extensions
+RULES_ANDROID_NDK_COMMIT = "d5c9d46a471e8fcd80e7ec5521b78bb2df48f4e0"
+bazel_dep(name = "rules_android_ndk")
+git_override(
+    module_name = "rules_android_ndk",
+    remote = "https://github.com/bazelbuild/rules_android_ndk",
+    commit = RULES_ANDROID_NDK_COMMIT,
+)
+
+# Use the extensions to set up the android tools
 remote_android_extensions = use_extension("@bazel_tools//tools/android:android_extensions.bzl", "remote_android_tools_extensions")
+android_sdk_repository_extension = use_extension("@rules_android//rules/android_sdk_repository:rule.bzl", "android_sdk_repository_extension")
+android_ndk_repository_extension = use_extension("@rules_android_ndk//:extension.bzl", "android_ndk_repository_extension")
+
+# Add the repos
 use_repo(remote_android_extensions, "android_gmaven_r8", "android_tools")
+use_repo(android_sdk_repository_extension, "androidsdk")
+use_repo(android_ndk_repository_extension, "androidndk")
 
 # Register the android toolchains
 register_toolchains(
     "@rules_android//toolchains/android:android_default_toolchain",
     "@rules_android//toolchains/android_sdk:android_sdk_tools",
+    "@androidsdk//:sdk-toolchain",
+    "@androidsdk//:all",
+    "@androidndk//:all",
 )
-
-# Register the android sdk repository
-android_sdk_repository_extension = use_extension("@rules_android//rules/android_sdk_repository:rule.bzl", "android_sdk_repository_extension")
-use_repo(android_sdk_repository_extension, "androidsdk")
-register_toolchains("@androidsdk//:sdk-toolchain", "@androidsdk//:all")
-```
-
-At the moment, you also need this in your `WORKSPACE.bazel` file (pending [this pull request](https://github.com/bazelbuild/rules_android_ndk/pull/70) to switch fully to bzlmod, thanks @ahumesky !)
-
-```starlark
-RULES_ANDROID_NDK_COMMIT = "f942689ffd3b3c59e7be0bd3b0ceabcaeffc6aea"
-
-RULES_ANDROID_NDK_SHA = "21e1ffc21f94e51230f1589a70dc72b309e7bd3acaea3c440caaa7f7b85e16fb"
-
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-
-http_archive(
-    name = "rules_android_ndk",
-    sha256 = RULES_ANDROID_NDK_SHA,
-    strip_prefix = "rules_android_ndk-%s" % RULES_ANDROID_NDK_COMMIT,
-    url = "https://github.com/bazelbuild/rules_android_ndk/archive/%s.zip" % RULES_ANDROID_NDK_COMMIT,
-)
-
-load("@rules_android_ndk//:rules.bzl", "android_ndk_repository")
-
-android_ndk_repository(
-    name = "androidndk",
-)
-
-register_toolchains("@androidndk//:all")
 ```
 
 #### BUILD.bazel
@@ -358,7 +293,7 @@ TODO: Add instructions and support for auto bundling linux and windows
 
 In order to bundle your `dylib`(s) and `frameworks`(s) with your mac/ios application, they need to be added as a CocoaPods module so they can be bundled with the app on build.
 
-> Note: Your `Podfile` won't be generated by flutter until after you've added your first dependency with native code and run a dart / flutter `pub get`. I recommend adding `path_provider`. YOU NEED TO HAVE A PLUGIN THAT BUILDS NATIVE MACOS CODE OR FLUTTER WILL IGNORE THE PODSPEC ANYWAY.
+***Note: Your `Podfile` won't be generated by flutter until after you've added your first dependency with native code and run a dart / flutter `pub get`. I recommend adding `path_provider` if you don't currently have any ffi native deps. YOU NEED TO HAVE A PLUGIN THAT BUILDS NATIVE MACOS CODE OR FLUTTER WILL IGNORE THE PODSPEC ANYWAY.***
 
 To do that, you'll need to add `pod 'bazel_builder', :path => '../build/shared_libs/bazel_builder.podspec'` to your Podfile, inside the `target 'Runner' do` block. I recommend putting it here:
 ```podspec
